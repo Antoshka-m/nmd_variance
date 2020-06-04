@@ -12,6 +12,7 @@ import os.path
 from tkinter import Tk
 from tkinter.filedialog import askopenfilenames
 from scipy.stats import linregress
+from scipy.signal import butter, lfilter, freqz, sosfiltfilt, sosfreqz
 
 def get_filenames():
     """
@@ -85,11 +86,13 @@ def get_exp_labels(file_list):
             exp_labels[i]=label
     return exp_labels
 
-def plot_flattening(t, x, x_flat, x_fit):
+def plot_flattening(t, x, x_flat, x_fit, ch_l):
     plt.figure(figsize=(8, 6))
     # plt.grid()
     plt.plot(t, x, label='raw timeseries data', color='blue')
-    plt.plot(t[:len(x_fit)], x_fit, color='red')
+    for ch_i in range(len(x_flat)//ch_l):
+        plt.plot(t[ch_i*ch_l:(ch_i+1)*ch_l], x_fit[ch_i*ch_l:(ch_i+1)*ch_l], color='red')
+    #plt.plot(t[:len(x_fit)], x_fit, color='red')
     plt.plot(t[:len(x_flat)], x_flat, label='flattened', color='orange')
     plt.xlabel('t, s', fontsize=24)
     plt.ylabel('Displacement, a.u.', fontsize=24)
@@ -106,6 +109,15 @@ def plot_signal(t, x, title=None):
      plt.ylabel('Displacement, a.u.', fontsize=24)
 # import data
 
+def plot_freq_resp(resp):
+    w, h = resp
+    plt.figure()
+    plt.semilogx(w, 20 * np.log10(abs(h)))
+    plt.xlabel('f, Hz')
+    plt.ylabel('dB')
+    plt.title('Freq response')
+    plt.show()
+
 def plot_multiple_sigs(t, sig, data, title=None):
     plt.figure(figsize=(8, 6))
     sns.set()
@@ -119,6 +131,38 @@ def plot_multiple_sigs(t, sig, data, title=None):
     plt.setp(fig.get_legend().get_title(), fontsize='18') # for legend title
     plt.tight_layout()
 
+
+def filt(data, fs, cutoff_low=None, cutoff_high=None, filt_type='low', order=5):
+    nyq = 0.5*fs
+    if cutoff_low is not None:
+        norm_cutoff_low = cutoff_low/nyq
+    if cutoff_high is not None:
+        norm_cutoff_high = cutoff_high/nyq
+    if filt_type is 'low':
+        #b, a = butter(order, norm_cutoff_high, btype='low', analog=False)
+        sos = butter(order,
+                      norm_cutoff_high,
+                      btype='low',
+                      output='sos',
+                      analog=False)
+    elif filt_type is 'band':
+        # b, a = butter(order,
+        #               [norm_cutoff_low, norm_cutoff_high],
+        #               btype='band',
+        #               analog=False)
+        sos = butter(order,
+                      [norm_cutoff_low, norm_cutoff_high],
+                      btype='band',
+                      output='sos',
+                      analog=False)
+    #data_filt = lfilter(b, a, data)
+    # note that the order is twice as passed since filter applied 2 directions
+    data_filt = sosfiltfilt(sos, data)
+    # w, h = freqz(b, a) #for showing freq response
+    w, h = sosfreqz(sos, fs=fs, worN=2000)
+    return data_filt, (w, h)
+    
+flat_window = 60 # size of window for flattening in seconds
 filenames = get_filenames()
 print('following files will be imported:')
 for file in filenames:
@@ -126,6 +170,8 @@ for file in filenames:
 exp_labels=get_exp_labels(filenames)
 data = pd.DataFrame()
 data_flat = pd.DataFrame()
+data_flat_filt = pd.DataFrame()
+data_flat_filt_band = pd.DataFrame()
 i=0
 for file in filenames:
     print('Analyzing %s...' % os.path.basename(file))
@@ -137,17 +183,39 @@ for file in filenames:
                     df[['Iz', 'Il', 'sum', 'experiment']]],
                    axis=0,
                    ignore_index=True)
-    fps=df['fps'].iloc[0]
-    y_norm_fit, y_norm_flat = flattening(df['Iz']/df['sum'], fps, chunk_l=60)
-    x_norm_fit, x_norm_flat = flattening(df['Il']/df['sum'], fps, chunk_l=60)
+    if 'fps' in df.columns:
+        fps=df['fps'].iloc[0]
+    else:
+        fps=input('Enter fps\n')
+        fps=float(fps)
+    y_norm_fit, y_norm_flat = flattening(df['Iz']/df['sum'], fps, chunk_l=flat_window)
+    x_norm_fit, x_norm_flat = flattening(df['Il']/df['sum'], fps, chunk_l=flat_window)
+    x_norm_flat_filt, resp_1 = filt(x_norm_flat, fs=fps, cutoff_high=20, filt_type='low')
+    plot_freq_resp(resp_1)
+    y_norm_flat_filt, resp_2 = filt(y_norm_flat, fs=fps, cutoff_high=20, filt_type='low')
+    plot_freq_resp(resp_2)
+    x_norm_flat_filt_band, resp_3 = filt(df['Il']/df['sum'], fs=fps, cutoff_low = 0.02, cutoff_high=20, filt_type='band')
+    plot_freq_resp(resp_3)
+    y_norm_flat_filt_band, resp_4 = filt(df['Iz']/df['sum'], fs=fps, cutoff_low = 0.02, cutoff_high=20, filt_type='band')
+    plot_freq_resp(resp_4)
     data_flat = pd.concat([data_flat,
                            pd.DataFrame({'Iz norm': y_norm_flat,
                                           'Il norm': x_norm_flat,
                                           'experiment': np.full(len(y_norm_flat), exp_labels[i])})],
                           axis=0)
-    plot_flattening(df['t'], df['Iz']/df['sum'], y_norm_flat, y_norm_fit)
+    data_flat_filt = pd.concat([data_flat_filt,
+                           pd.DataFrame({'Iz norm': y_norm_flat_filt,
+                                          'Il norm': x_norm_flat_filt,
+                                          'experiment': np.full(len(y_norm_flat_filt), exp_labels[i])})],
+                          axis=0)
+    data_flat_filt_band = pd.concat([data_flat_filt_band,
+                           pd.DataFrame({'Iz norm': y_norm_flat_filt_band,
+                                          'Il norm': x_norm_flat_filt_band,
+                                          'experiment': np.full(len(y_norm_flat_filt_band), exp_labels[i])})],
+                          axis=0)
+    plot_flattening(df['t'], df['Iz']/df['sum'], y_norm_flat, y_norm_fit, ch_l=flat_window)
     plot_signal(df['t'][:len(y_norm_flat)], y_norm_flat, 'vertical deflection')
-    plot_flattening(df['t'], df['Il']/df['sum'], x_norm_flat, x_norm_fit)
+    plot_flattening(df['t'], df['Il']/df['sum'], x_norm_flat, x_norm_fit, ch_l=flat_window)
     plot_signal(df['t'][:len(x_norm_flat)], x_norm_flat, 'horizontal deflection')
     i+=1
 
@@ -155,8 +223,21 @@ data_flat =pd.DataFrame({'t': np.arange(0, len(data_flat)/fps, 1/fps),
                          'Iz norm': data_flat['Iz norm'],
                          'Il norm': data_flat['Il norm'],
                          'experiment': data_flat['experiment']})
+data_flat_filt =pd.DataFrame({'t': np.arange(0, len(data_flat_filt)/fps, 1/fps),
+                         'Iz norm': data_flat_filt['Iz norm'],
+                         'Il norm': data_flat_filt['Il norm'],
+                         'experiment': data_flat_filt['experiment']})
+data_flat_filt_band =pd.DataFrame({'t': np.arange(0, len(data_flat_filt_band)/fps, 1/fps),
+                         'Iz norm': data_flat_filt_band['Iz norm'],
+                         'Il norm': data_flat_filt_band['Il norm'],
+                         'experiment': data_flat_filt_band['experiment']})
 plot_multiple_sigs('t', 'Iz norm', data=data_flat, title='flattened vertical deflection (over sum)')
 plot_multiple_sigs('t', 'Il norm', data=data_flat, title='flattened horizontal deflection (over sum)')
+plot_multiple_sigs('t', 'Iz norm', data=data_flat_filt, title='flattened vertical deflection (over sum) low-pass filtered')
+plot_multiple_sigs('t', 'Il norm', data=data_flat_filt, title='flattened horizontal deflection (over sum) low-pass filtered')
+plot_multiple_sigs('t', 'Iz norm', data=data_flat_filt_band, title='flattened vertical deflection (over sum) low-pass filtered, bandpass')
+plot_multiple_sigs('t', 'Il norm', data=data_flat_filt_band, title='flattened horizontal deflection (over sum) low-pass filtered, bandpass')
+
 plt.show()
 # plot_signal(np.arange(0, len(data_flat)/fps, 1/fps), data_flat['Iz norm'])
 # plot_signal(np.arange(0, len(data_flat)/fps, 1/fps), data_flat['Il norm'])
