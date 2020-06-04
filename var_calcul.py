@@ -136,8 +136,20 @@ def plot_multiple_sigs(t, sig, data, title=None):
     plt.setp(fig.get_legend().get_texts(), fontsize='14') # for legend text
     plt.setp(fig.get_legend().get_title(), fontsize='18') # for legend title
     plt.tight_layout()
+    
+    
+def plot_var_bars(data, var_label):
+    plt.figure()
+    sns.set()
+    sns.barplot(x='experiment', y=var_label, data=data, ci='sd')
 
 
+def plot_var_boxplot(data, var_label):
+    plt.figure()
+    sns.set()
+    sns.boxplot(x='experiment', y=var_label, data=data)
+    
+    
 filenames = get_filenames()
 print('following files will be imported:')
 for file in filenames:
@@ -196,6 +208,18 @@ plot_multiple_sigs('t', 'Iz', data=data_flat, title='flattened vertical deflecti
 plot_multiple_sigs('t', 'Il', data=data_flat, title='flattened horizontal deflection')
 plot_multiple_sigs('t', 'var_x', data=var_data_flat, title='flattened vertical variance' )
 plot_multiple_sigs('t', 'var_y', data=var_data_flat, title='flattened horizontal variance')
+var_data_norm = var_data_flat.copy()
+var_x_mean = var_data_norm[var_data_norm['experiment']==var_data_norm['experiment'].iloc[0]]['var_x'].mean()
+var_data_norm['var_x']=var_data_norm['var_x']/var_x_mean
+var_y_mean = var_data_norm[var_data_norm['experiment']==var_data_norm['experiment'].iloc[0]]['var_y'].mean()
+var_data_norm['var_y']=var_data_norm['var_y']/var_y_mean
+# plot_var_bars(data=var_data_norm, var_label='var_x')
+# plot_var_bars(data=var_data_norm, var_label='var_y')
+plot_var_bars(data=var_data_flat, var_label='var_x')
+plot_var_bars(data=var_data_flat, var_label='var_y')
+plot_var_boxplot(data=var_data_flat, var_label='var_x')
+plot_var_boxplot(data=var_data_flat, var_label='var_y')
+
 
 
 
