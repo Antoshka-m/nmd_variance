@@ -13,7 +13,7 @@ import os.path
 from tkinter import Tk
 from tkinter.filedialog import askopenfilenames
 from scipy.stats import linregress
-
+from scipy.stats import median_absolute_deviation
 do_flattening = True
 flat_window = 60 #len of window for flattening in seconds
 var_window = 10 # window for calculating variance
@@ -125,7 +125,7 @@ def var_calc(data, fps, chunk_l):
     return var_data
 
 def plot_multiple_sigs(t, sig, data, title=None):
-    plt.figure(figsize=(8, 6))
+    plt.figure(figsize=(8, 6), num=title)
     sns.set()
     plt.title(title)
     fig=sns.lineplot(x=t, y=sig, data=data, hue='experiment', ci=None)
@@ -138,17 +138,63 @@ def plot_multiple_sigs(t, sig, data, title=None):
     plt.tight_layout()
     
     
-def plot_var_bars(data, var_label):
-    plt.figure()
+def plot_var_bars_mean(data, var_label, title=None):
+    plt.figure(num=title)
+    plt.title(title)
     sns.set()
     sns.barplot(x='experiment', y=var_label, data=data, ci='sd')
 
-
-def plot_var_boxplot(data, var_label):
-    plt.figure()
+def plot_var_bars_med(data, var_label, exp_labels, title=None):
+    mad=np.empty(len(exp_labels))
+    for i, exp in enumerate(exp_labels):
+        y = data[data['experiment']==exp][var_label]
+        mad[i]=median_absolute_deviation(y)
+    plt.figure(num=title)
+    plt.title(title)
     sns.set()
-    sns.boxplot(x='experiment', y=var_label, data=data)
+    sns.barplot(x='experiment', y=var_label, data=data, ci=None, estimator=np.median, yerr=mad)
     
+        
+
+def plot_var_boxplot(data, var_label, title=None):
+    plt.figure(num=title)
+    plt.title(title)
+    sns.set()
+    sns.boxplot(x='experiment', y=var_label, data=data, showfliers=False)
+    
+    
+def rem_spikes_one_mean(x, n=3):
+    mean = np.mean(x)
+    std = np.std(x)
+    x_clean = np.copy(x)
+    # df = pd.DataFrame({'x': x, 't': t})
+    # x_clean = df[abs(df['x'])>abs(mean+2*std)]['x'].apply(
+            # lambda x: np.random.uniform(mean-2*std, mean+2*std))
+    # mask = (df['x'])
+    # x_clean = df['x'].apply(lambda x: 'np.random.uniform(mean-2*std, mean+2*std)' if abs(x)>abs(mean+2*std))
+    # x_clean[abs(x_clean)>abs(mean+n*std)]=np.random.uniform(mean-n*std, mean+n*std, len(x_clean[abs(x_clean)>abs(mean+n*std)]))
+    x_clean[(x_clean>mean+n*std)|(x_clean<mean-n*std)]=np.random.uniform(
+        mean-n*std,
+        mean+n*std,
+        len(x_clean[(x_clean>mean+n*std)|(x_clean<mean-n*std)])) 
+    return x_clean, (mean-n*std, mean+n*std)
+
+
+def rem_spikes_one_median(x, n=3):
+    med = np.median(x)
+    mad = median_absolute_deviation(x)
+    x_clean = np.copy(x)
+    # df = pd.DataFrame({'x': x, 't': t})
+    # x_clean = df[abs(df['x'])>abs(mean+2*std)]['x'].apply(
+            # lambda x: np.random.uniform(mean-2*std, mean+2*std))
+    # mask = (df['x'])
+    # x_clean = df['x'].apply(lambda x: 'np.random.uniform(mean-2*std, mean+2*std)' if abs(x)>abs(mean+2*std))
+    # x_clean[abs(x_clean)>abs(mean+n*std)]=np.random.uniform(med-n*mad, med+n*mad, len(x_clean[abs(x_clean)>abs(med+n*mad)]))
+    x_clean[(x_clean>med+n*mad)|(x_clean<med-n*mad)]=np.random.uniform(
+        med-n*mad,
+        med+n*mad,
+        len(x_clean[(x_clean>med+n*mad)|(x_clean<med-n*mad)]))
+    return x_clean, (med-n*mad, med+n*mad)
     
 filenames = get_filenames()
 print('following files will be imported:')
@@ -157,7 +203,9 @@ for file in filenames:
 exp_labels=get_exp_labels(filenames)
 data = pd.DataFrame()
 data_flat = pd.DataFrame()
+data_flat_3sd_cleaned=pd.DataFrame()
 var_data_flat = pd.DataFrame()
+var_data_flat_3sd_cleaned = pd.DataFrame()
 i=0
 for file in filenames:
     print('Analyzing %s...' % os.path.basename(file))
@@ -174,12 +222,19 @@ for file in filenames:
     else:
         fps=input('Enter fps\n')
         fps=float(fps)
+    # do flattening within given non-overlapping flat_windows (in seconds)
     y_fit, y_flat = flattening(df[y_name], fps, chunk_l=flat_window)
     x_fit, x_flat = flattening(df[x_name], fps, chunk_l=flat_window)
+    # now remove spikes of the timeseries data: those that are outside of 3SD from mean
+    x_flat_3sd_cleaned, _ = rem_spikes_one_mean(x_flat)
+    y_flat_3sd_cleaned, _ = rem_spikes_one_mean(y_flat)
     # y_norm_fit, y_norm_flat = flattening(df[y_norm_name], fps, chunk_l=flat_window)
     # x_norm_fit, x_norm_flat = flattening(df[x_norm_name], fps, chunk_l=flat_window)
     var_x = var_calc(data=x_flat, fps=fps, chunk_l=var_window)
     var_y = var_calc(data=y_flat, fps=fps, chunk_l=var_window)
+    # also calculate variance for the cleaned data (without spikes)
+    var_x_3sd_cleaned = var_calc(data=x_flat_3sd_cleaned, fps=fps, chunk_l=var_window)
+    var_y_3sd_cleaned = var_calc(data=y_flat_3sd_cleaned, fps=fps, chunk_l=var_window)
     print(var_x.mean())
     print(var_y.mean())
     # var_x_norm = var_calc(data=x_norm_flat, fps=fps, chunk_l=var_window)
@@ -189,25 +244,50 @@ for file in filenames:
                                           'Il': x_flat,
                                           'experiment': np.full(len(y_flat), exp_labels[i])})],
                           axis=0)
+    data_flat_3sd_cleaned = pd.concat([data_flat_3sd_cleaned,
+                           pd.DataFrame({'Iz': y_flat_3sd_cleaned,
+                                          'Il': x_flat_3sd_cleaned,
+                                          'experiment': np.full(len(y_flat_3sd_cleaned), exp_labels[i])})],
+                          axis=0)
     var_data_flat = pd.concat([var_data_flat,
                                pd.DataFrame({'var_x': var_x,
                                              'var_y': var_y,
                                              'experiment': np.full(len(var_y), exp_labels[i])})]).reset_index()
+    var_data_flat_3sd_cleaned = pd.concat([var_data_flat_3sd_cleaned,
+                               pd.DataFrame({'var_x': var_x_3sd_cleaned,
+                                             'var_y': var_y_3sd_cleaned,
+                                             'experiment': np.full(len(var_y_3sd_cleaned), exp_labels[i])})]).reset_index()
     i+=1
 data_flat =pd.DataFrame({'t': np.arange(0, len(data_flat)/fps, 1/fps),
                          'Iz': data_flat['Iz'],
                          'Il': data_flat['Il'],
                          'experiment': data_flat['experiment']})
+data_flat_3sd_cleaned =pd.DataFrame({'t': np.arange(0, len(data_flat_3sd_cleaned)/fps, 1/fps),
+                         'Iz': data_flat_3sd_cleaned['Iz'],
+                         'Il': data_flat_3sd_cleaned['Il'],
+                         'experiment': data_flat_3sd_cleaned['experiment']})
 var_data_flat =pd.DataFrame({'t': np.arange(0, len(var_data_flat)*var_window, var_window),
                          'var_x': var_data_flat['var_x'],
                          'var_y': var_data_flat['var_y'],
+                         'var_sum': var_data_flat['var_x']+var_data_flat['var_y'],
                          'experiment': var_data_flat['experiment']}).reset_index()
+var_data_flat_3sd_cleaned =pd.DataFrame({'t': np.arange(0, len(var_data_flat_3sd_cleaned)*var_window, var_window),
+                         'var_x': var_data_flat_3sd_cleaned['var_x'],
+                         'var_y': var_data_flat_3sd_cleaned['var_y'],
+                         'var_sum': var_data_flat_3sd_cleaned['var_x']+var_data_flat_3sd_cleaned['var_y'],
+                         'experiment': var_data_flat_3sd_cleaned['experiment']}).reset_index()
 
 
-plot_multiple_sigs('t', 'Iz', data=data_flat, title='flattened vertical deflection' )
+plot_multiple_sigs('t', 'Iz', data=data_flat, title='flattened vertical deflection')
 plot_multiple_sigs('t', 'Il', data=data_flat, title='flattened horizontal deflection')
-plot_multiple_sigs('t', 'var_x', data=var_data_flat, title='flattened vertical variance' )
-plot_multiple_sigs('t', 'var_y', data=var_data_flat, title='flattened horizontal variance')
+plot_multiple_sigs('t', 'Iz', data=data_flat_3sd_cleaned, title='flattened vertical deflection cleaned' )
+plot_multiple_sigs('t', 'Il', data=data_flat_3sd_cleaned, title='flattened horizontal deflection cleaned')
+plot_multiple_sigs('t', 'var_x', data=var_data_flat, title='variance of flattened horizontal deflection')
+plot_multiple_sigs('t', 'var_y', data=var_data_flat, title='variance of flattened vertical deflection')
+plot_multiple_sigs('t', 'var_sum', data=var_data_flat, title='sum variance of flattened signals')
+plot_multiple_sigs('t', 'var_x', data=var_data_flat_3sd_cleaned, title='variance of x flattened cleaned')
+plot_multiple_sigs('t', 'var_y', data=var_data_flat_3sd_cleaned, title='variance of y flattened cleaned')
+plot_multiple_sigs('t', 'var_sum', data=var_data_flat_3sd_cleaned, title='sum variance of signals flattened cleaned')
 var_data_norm = var_data_flat.copy()
 var_x_mean = var_data_norm[var_data_norm['experiment']==var_data_norm['experiment'].iloc[0]]['var_x'].mean()
 var_data_norm['var_x']=var_data_norm['var_x']/var_x_mean
@@ -215,10 +295,26 @@ var_y_mean = var_data_norm[var_data_norm['experiment']==var_data_norm['experimen
 var_data_norm['var_y']=var_data_norm['var_y']/var_y_mean
 # plot_var_bars(data=var_data_norm, var_label='var_x')
 # plot_var_bars(data=var_data_norm, var_label='var_y')
-plot_var_bars(data=var_data_flat, var_label='var_x')
-plot_var_bars(data=var_data_flat, var_label='var_y')
-plot_var_boxplot(data=var_data_flat, var_label='var_x')
-plot_var_boxplot(data=var_data_flat, var_label='var_y')
+plot_var_bars_mean(data=var_data_flat, var_label='var_x', title='variance x flattened')
+plot_var_bars_mean(data=var_data_flat, var_label='var_y', title='variance y flattened')
+plot_var_bars_mean(data=var_data_flat, var_label='var_sum', title='sum of variance of flattened signals')
+plot_var_bars_med(data=var_data_flat, var_label='var_x', exp_labels=exp_labels, title='median variance x flattened')
+plot_var_bars_med(data=var_data_flat, var_label='var_y', exp_labels=exp_labels, title='median variance y flattened')
+plot_var_bars_med(data=var_data_flat, var_label='var_sum', exp_labels=exp_labels, title='median sum of variance of flattened signals')
+plot_var_boxplot(data=var_data_flat, var_label='var_x', title='variance x flattened (boxplot)')
+plot_var_boxplot(data=var_data_flat, var_label='var_y', title='variance y flattened (boxplot)')
+plot_var_boxplot(data=var_data_flat, var_label='var_sum', title='sum of variance of flattened signals (boxplot)')
+
+plot_var_bars_mean(data=var_data_flat_3sd_cleaned, var_label='var_x', title='variance x, flattened, 3SD cleaned ')
+plot_var_bars_mean(data=var_data_flat_3sd_cleaned, var_label='var_y', title='variance y flattened, 3SD cleaned ')
+plot_var_bars_mean(data=var_data_flat_3sd_cleaned, var_label='var_sum', title='sum of variance of flattened, 3SD cleaned signals')
+plot_var_bars_med(data=var_data_flat_3sd_cleaned, var_label='var_x', exp_labels=exp_labels, title='median variance x, flattened, 3SD cleaned ')
+plot_var_bars_med(data=var_data_flat_3sd_cleaned, var_label='var_y', exp_labels=exp_labels, title='median variance y flattened, 3SD cleaned ')
+plot_var_bars_med(data=var_data_flat_3sd_cleaned, var_label='var_sum', exp_labels=exp_labels, title='median sum of variance of flattened, 3SD cleaned signals')
+plot_var_boxplot(data=var_data_flat_3sd_cleaned, var_label='var_x', title='variance x flattened, 3SD cleaned (boxplot)')
+plot_var_boxplot(data=var_data_flat_3sd_cleaned, var_label='var_y', title='variance y flattened, 3SD cleaned (boxplot)')
+plot_var_boxplot(data=var_data_flat_3sd_cleaned, var_label='var_sum', title='sum of variance of flattened, 3SD cleaned signals (boxplot)')
+
 
 
 
